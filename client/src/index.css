@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-bg text-ink antialiased;
+    font-feature-settings: 'tnum' 1, 'cv11' 1;
+  }
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-surface;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm text-ink placeholder:text-muted
+      focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium text-soft;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors
+      disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-[#2a78d6];
+  }
+  .btn-secondary {
+    @apply btn border border-line bg-raised text-ink hover:bg-line;
+  }
+  .btn-ghost {
+    @apply btn text-soft hover:bg-raised hover:text-ink;
+  }
+  .btn-danger {
+    @apply btn bg-loss/15 text-loss hover:bg-loss/25;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
