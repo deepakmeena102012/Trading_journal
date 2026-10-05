@@ -1,11 +1,62 @@
 import { useEffect, useState } from 'react';
-import { ImageOff, ImagePlus, Loader2, Trash2 } from 'lucide-react';
+import { Camera, ImageOff, ImagePlus, Loader2, Trash2 } from 'lucide-react';
 import api from '../lib/api';
 import { SCREENSHOT_KINDS } from '../lib/constants';
 import { Modal } from './ui';
 
 export const MAX_IMAGE_MB = 4;
-const ACCEPT = 'image/png,image/jpeg,image/webp,image/gif';
+const MAX_INPUT_MB = 40;
+const MAX_DIMENSION = 2560;
+const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const ACCEPT = 'image/*';
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('decode'));
+    };
+    img.src = url;
+  });
+}
+
+function canvasToBlob(canvas, quality) {
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+}
+
+/**
+ * Returns a file the server will accept: small images in an allowed format are kept as-is,
+ * anything else (too large, or another browser-decodable format) is re-encoded as a JPEG.
+ */
+async function prepareImage(file) {
+  if (ALLOWED_TYPES.includes(file.type) && file.size <= MAX_IMAGE_MB * 1024 * 1024) return file;
+
+  const img = await loadImage(file);
+  let maxDim = MAX_DIMENSION;
+  for (const quality of [0.85, 0.75, 0.65, 0.55]) {
+    const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff'; // JPEG has no transparency
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await canvasToBlob(canvas, quality);
+    if (blob && blob.size <= MAX_IMAGE_MB * 1024 * 1024) {
+      const name = `${file.name.replace(/\.[^.]+$/, '') || 'screenshot'}.jpg`;
+      return new File([blob], name, { type: 'image/jpeg' });
+    }
+    maxDim = Math.round(maxDim * 0.8);
+  }
+  throw new Error('too-large');
+}
 
 /** Loads a private screenshot with the auth header and renders it via an object URL. */
 export function AuthImage({ id, alt, className, onClick }) {
@@ -83,6 +134,17 @@ export function ScreenshotGallery({ screenshots }) {
   );
 }
 
+/** Opens the device camera directly on phones/tablets (falls back to a file picker on desktop). */
+function CameraButton({ onPick }) {
+  return (
+    <label className="inline-flex cursor-pointer items-center gap-1 text-accent hover:underline">
+      <Camera size={12} aria-hidden />
+      Take photo
+      <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => onPick(e.target)} />
+    </label>
+  );
+}
+
 /**
  * Editable screenshot slots for the trade form.
  * Existing screenshots can be removed immediately; new files are kept as `pending`
@@ -91,6 +153,7 @@ export function ScreenshotGallery({ screenshots }) {
 export function ScreenshotSlots({ existing = [], pending, onPendingChange, onRemoveExisting, removing }) {
   const [error, setError] = useState('');
   const [previews, setPreviews] = useState({});
+  const [processing, setProcessing] = useState(null);
 
   useEffect(() => {
     const urls = {};
@@ -99,12 +162,26 @@ export function ScreenshotSlots({ existing = [], pending, onPendingChange, onRem
     return () => Object.values(urls).forEach((u) => URL.revokeObjectURL(u));
   }, [pending]);
 
-  function pick(kind, file) {
+  async function pick(kind, input) {
+    const file = input.files?.[0];
+    input.value = ''; // allow picking the same file again
     setError('');
     if (!file) return;
-    if (!ACCEPT.split(',').includes(file.type)) return setError('Only PNG, JPEG, WEBP or GIF images are allowed.');
-    if (file.size > MAX_IMAGE_MB * 1024 * 1024) return setError(`Images must be ${MAX_IMAGE_MB} MB or smaller.`);
-    onPendingChange({ ...pending, [kind]: file });
+    if (file.type && !file.type.startsWith('image/')) return setError('Please choose an image file.');
+    if (file.size > MAX_INPUT_MB * 1024 * 1024) return setError(`Images must be ${MAX_INPUT_MB} MB or smaller.`);
+    setProcessing(kind);
+    try {
+      const ready = await prepareImage(file);
+      onPendingChange((prev) => ({ ...prev, [kind]: ready }));
+    } catch (err) {
+      setError(
+        err.message === 'too-large'
+          ? 'This image is too large even after compression. Try cropping it.'
+          : 'This image format is not supported by your browser. Please use PNG, JPEG, WEBP or GIF.'
+      );
+    } finally {
+      setProcessing(null);
+    }
   }
 
   return (
@@ -141,24 +218,41 @@ export function ScreenshotSlots({ existing = [], pending, onPendingChange, onRem
                   >
                     {removing === k.value ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                   </button>
-                  <label className="mt-1 block cursor-pointer text-xs text-accent hover:underline">
-                    Replace
-                    <input type="file" accept={ACCEPT} className="sr-only" onChange={(e) => pick(k.value, e.target.files?.[0])} />
-                  </label>
+                  <div className="mt-1 flex gap-3 text-xs">
+                    <label className="cursor-pointer text-accent hover:underline">
+                      Replace
+                      <input type="file" accept={ACCEPT} className="sr-only" onChange={(e) => pick(k.value, e.target)} />
+                    </label>
+                    <CameraButton onPick={(input) => pick(k.value, input)} />
+                  </div>
                 </div>
               ) : (
                 <label className="flex aspect-video cursor-pointer flex-col items-center justify-center gap-1 rounded bg-bg text-xs text-muted hover:text-soft">
-                  <ImagePlus size={20} aria-hidden />
-                  Add image
-                  <input type="file" accept={ACCEPT} className="sr-only" onChange={(e) => pick(k.value, e.target.files?.[0])} />
+                  {processing === k.value ? (
+                    <>
+                      <Loader2 size={20} className="animate-spin" aria-hidden />
+                      Preparing image…
+                    </>
+                  ) : (
+                    <>
+                      <ImagePlus size={20} aria-hidden />
+                      Add image
+                    </>
+                  )}
+                  <input type="file" accept={ACCEPT} className="sr-only" onChange={(e) => pick(k.value, e.target)} />
                 </label>
+              )}
+              {!file && !shot && processing !== k.value && (
+                <div className="mt-1 text-xs">
+                  <CameraButton onPick={(input) => pick(k.value, input)} />
+                </div>
               )}
             </div>
           );
         })}
       </div>
       {error && <p className="mt-2 text-xs text-loss">{error}</p>}
-      <p className="mt-2 text-xs text-muted">Optional. PNG, JPEG, WEBP or GIF up to {MAX_IMAGE_MB} MB each.</p>
+      <p className="mt-2 text-xs text-muted">Optional. Upload a screenshot or take a photo with your camera. Large images are compressed automatically.</p>
     </div>
   );
 }
